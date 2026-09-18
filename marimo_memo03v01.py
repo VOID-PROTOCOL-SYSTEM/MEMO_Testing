@@ -1,6 +1,4 @@
 # /// script
-# [tool.marimo.display]
-# theme = "dark"
 # requires-python = ">=3.11"
 # dependencies = [
 #     "marimo",
@@ -8,6 +6,10 @@
 #     "matplotlib",
 #     "numpy",
 # ]
+#
+# [tool.marimo.display]
+# theme = "dark"
+# ///
 
 import marimo
 
