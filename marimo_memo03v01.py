@@ -1044,6 +1044,9 @@ def _(json, os):
             if cached.get("version") == version and cached.get("key") == key:
                 return cached["data"]
         data = compute_fn()
+        _cache_dir = os.path.dirname(cache_path)
+        if _cache_dir:
+            os.makedirs(_cache_dir, exist_ok=True)
         with open(cache_path, "w") as f:
             json.dump({"version": version, "key": key, "data": data}, f)
         return data
