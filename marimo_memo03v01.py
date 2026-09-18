@@ -26,8 +26,8 @@ def imports():
     import os
     import datetime
 
-    SAVE_FILE_M02 = "Global_Files/responses_M02.json"   # Memo 02 responses (read-only reference)
-    SAVE_FILE_M03 = "Global_Files/responses_M03.json"   # Memo 03 responses (written here)
+    SAVE_FILE_M02 = mo.notebook_location() / "Global_Files/responses_M02.json"   # Memo 02 responses (read-only reference)
+    SAVE_FILE_M03 = mo.notebook_location() / "Global_Files/responses_M03.json"   # Memo 03 responses (written here)
     return (
         LinearSegmentedColormap,
         SAVE_FILE_M03,
