@@ -22,7 +22,21 @@ app = marimo.App(
 
 
 @app.cell
-def imports():
+async def imports():
+    # ------------------------------------------------------------------
+    # Runtime / asset bridge
+    #
+    # Normal Marimo:
+    #   external JSON/cache/animation assets are read from the project folder.
+    #
+    # GitHub Pages / WASM:
+    #   the workbook is read-only. JSON caches and pre-generated animations
+    #   are read DIRECTLY from their GitHub Pages URLs. They are NOT copied
+    #   into Pyodide's filesystem first.
+    #
+    # The only files fetched into Pyodide are executable/data dependencies
+    # that Python itself must import/load (numpy_policy.py and .npz weights).
+    # ------------------------------------------------------------------
     import marimo as mo
     import random
     import math
@@ -38,12 +52,73 @@ def imports():
     import json
     import os
     import datetime
+    import sys
+    from pathlib import Path
 
-    SAVE_FILE_M02 = "Global_Files/responses_M02.json"   # Memo 02 responses (read-only reference)
-    SAVE_FILE_M03 = "Global_Files/responses_M03.json"   # Memo 03 responses (written here)
+    IS_WASM = sys.platform == "emscripten" or "pyodide" in sys.modules
+
+    if IS_WASM:
+        from pyodide.http import pyfetch
+
+        # GitHub Pages root for this repository.
+        GITHUB_ASSET_BASE = (
+            "https://void-protocol-system.github.io/MEMO_Testing/"
+        )
+
+        VIRTUAL_ROOT = Path("/tmp/algo_sat_memo3")
+        VIRTUAL_ROOT.mkdir(parents=True, exist_ok=True)
+
+        async def _download_runtime_file(relpath, binary=False, required=True):
+            """Fetch only Python/NPZ runtime dependencies into Pyodide."""
+            relpath = str(relpath).replace("\\", "/").lstrip("/")
+            url = GITHUB_ASSET_BASE + relpath
+            response = await pyfetch(url)
+            if not response.ok:
+                if required:
+                    raise RuntimeError(
+                        f"GitHub Pages runtime asset failed to load: HTTP "
+                        f"{response.status}\n{url}\n\n"
+                        "Make sure this file is committed to the repository "
+                        "at exactly this path."
+                    )
+                return False
+
+            target = VIRTUAL_ROOT / relpath
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if binary:
+                target.write_bytes(await response.bytes())
+            else:
+                target.write_text(await response.string(), encoding="utf-8")
+            return True
+
+        # JSON caches and GIFs are deliberately NOT downloaded here.
+        _runtime_assets = [
+            ("numpy_policy.py", False, True),
+            ("MEMO_3/policy_wings2.npz", True, False),
+            ("MEMO_3/policy_wings3.npz", True, False),
+            ("MEMO_3/policy_wings4.npz", True, False),
+            ("policy_wings2.npz", True, False),
+            ("policy_wings3.npz", True, False),
+            ("policy_wings4.npz", True, False),
+        ]
+        for _rel, _binary, _required in _runtime_assets:
+            await _download_runtime_file(_rel, binary=_binary, required=_required)
+
+        NB_DIR = VIRTUAL_ROOT
+        sys.path.insert(0, str(VIRTUAL_ROOT))
+    else:
+        GITHUB_ASSET_BASE = None
+        NB_DIR = mo.notebook_location()
+
+    SAVE_FILE_M02 = NB_DIR / "Global_Files/responses_M02.json"
+    SAVE_FILE_M03 = NB_DIR / "Global_Files/responses_M03.json"
+
     return (
         LinearSegmentedColormap,
         SAVE_FILE_M03,
+        GITHUB_ASSET_BASE,
+        IS_WASM,
+        NB_DIR,
         animation,
         datetime,
         itertools,
@@ -872,16 +947,14 @@ def m30_exemplar_run(
 
 
 @app.cell
-def m30_input(SAVE_FILE_M03, json, mo, os):
+def m30_input(SAVE_FILE_M03, load_json_asset, mo):
     _saved = ""
-    if os.path.exists(SAVE_FILE_M03):
-        try:
-            with open(SAVE_FILE_M03, "r") as _f:
-                _d = json.load(_f)
-            if _d:
-                _saved = _d[-1].get("M30_orientation", "")
-        except Exception:
-            pass
+    try:
+        _d = load_json_asset(SAVE_FILE_M03)
+        if _d:
+            _saved = _d[-1].get("M30_orientation", "")
+    except Exception:
+        pass
 
     resp_m30 = mo.ui.text_area(
         label="**[M3-0] Which Memo 01/02 assumptions does this revision invalidate?**",
@@ -953,16 +1026,14 @@ def m31_header(mo):
 
 
 @app.cell
-def m31_input(SAVE_FILE_M03, json, mo, os):
+def m31_input(SAVE_FILE_M03, load_json_asset, mo):
     _saved = ""
-    if os.path.exists(SAVE_FILE_M03):
-        try:
-            with open(SAVE_FILE_M03, "r") as _f:
-                _d = json.load(_f)
-            if _d:
-                _saved = _d[-1].get("M31_design", "")
-        except Exception:
-            pass
+    try:
+        _d = load_json_asset(SAVE_FILE_M03)
+        if _d:
+            _saved = _d[-1].get("M31_design", "")
+    except Exception:
+        pass
 
     resp_m31 = mo.ui.text_area(
         label="**[M3-1] Improved data model and algorithm (300-500 words)**",
@@ -995,16 +1066,14 @@ def _(mo, resp_m31):
 
 
 @app.cell
-def m31_pseudocode(SAVE_FILE_M03, json, mo, os):
+def m31_pseudocode(SAVE_FILE_M03, load_json_asset, mo):
     _saved = ""
-    if os.path.exists(SAVE_FILE_M03):
-        try:
-            with open(SAVE_FILE_M03, "r") as _f:
-                _d = json.load(_f)
-            if _d:
-                _saved = _d[-1].get("M31_pseudocode", "")
-        except Exception:
-            pass
+    try:
+        _d = load_json_asset(SAVE_FILE_M03)
+        if _d:
+            _saved = _d[-1].get("M31_pseudocode", "")
+    except Exception:
+        pass
 
     resp_m31_pseudo = mo.ui.code_editor(
         label="**[M3-1] Pseudocode (Algorithmics metalanguage)**",
@@ -1030,57 +1099,82 @@ def _(mo, resp_m31_pseudo):
 
 
 @app.cell
-def notebook_paths(mo):
-    # mo.notebook_location() resolves correctly whether this notebook is
-    # running locally in a normal marimo session or exported to a static
-    # WASM bundle (e.g. hosted on GitHub Pages) -- a bare relative string
-    # like "MEMO_3/cache_x.json" only works in the first case, since
-    # WASM/Pyodide has no real working directory of its own to resolve it
-    # against. Every file this notebook reads or writes is built from this
-    # single anchor point instead.
-    NB_DIR = mo.notebook_location()
+def notebook_paths(mo, IS_WASM, NB_DIR):
+    # Local Marimo uses the real project directory. In WASM these paths are
+    # only virtual working paths; committed repository assets are read by URL.
     CHECKPOINT_DIR = NB_DIR
     CACHE_DIR = NB_DIR / "MEMO_3"
     ASSETS_DIR = CACHE_DIR / "extras_assets"
-    return ASSETS_DIR, CACHE_DIR, CHECKPOINT_DIR, NB_DIR
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+    return ASSETS_DIR, CACHE_DIR, CHECKPOINT_DIR
 
 
 @app.cell
-def _(json, os):
+def _(GITHUB_ASSET_BASE, IS_WASM, NB_DIR, json, os):
     CACHE_VERSION = "v1"
 
-    def load_or_compute(cache_path, version, key, compute_fn=None):
-        """Read-only: reads a pre-generated cache via cache_path.read_text().
-        This matters specifically because cache_path is built from
-        mo.notebook_location(), which resolves to a real local path when
-        running natively but to a URL when running under WASM/Pyodide --
-        the builtin open()/os.path.exists() only understand local paths,
-        so they silently fail to find anything in a WASM deployment.
-        Path.read_text() is what correctly does a local read *or* an HTTP
-        fetch depending on context.
+    def _remote_asset_url(cache_path):
+        """Convert a virtual project path into its GitHub Pages asset URL."""
+        p = os.path.normpath(str(cache_path)).replace("\\", "/")
+        root = os.path.normpath(str(NB_DIR)).replace("\\", "/")
+        prefix = root.rstrip("/") + "/"
+        rel = p[len(prefix):] if p.startswith(prefix) else os.path.basename(p)
+        return GITHUB_ASSET_BASE + rel.lstrip("/")
 
-        compute_fn is accepted only so every call site here matches the
-        original (torch-based) notebook's signature -- it is never
-        invoked. Every MEMO_3/ cache file is expected to already exist,
-        generated by running the full notebook locally and bundling the
-        resulting MEMO_3/ folder alongside this one when deploying."""
-        try:
-            cached = json.loads(cache_path.read_text())
-        except (FileNotFoundError, OSError) as e:
-            raise FileNotFoundError(
-                f"Missing cache file: {cache_path}\n"
-                "This WASM deployment is read-only and expects every "
-                "MEMO_3/ cache to already exist. Regenerate it by running "
-                "the full notebook locally, then re-bundle the MEMO_3/ "
-                "folder alongside this notebook."
-            ) from e
-        if cached.get("version") != version or cached.get("key") != key:
-            raise ValueError(
-                f"Cache file is present but stale: {cache_path}\n"
-                "Its version/key doesn't match what this notebook "
-                "currently expects. Regenerate it locally and re-bundle."
-            )
-        return cached["data"]
+    def _read_remote_json(url):
+        # Synchronous helper so all existing Marimo cells can stay synchronous.
+        from pyodide.http import open_url
+        with open_url(url) as _f:
+            raw = _f.read()
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        return json.loads(raw)
+
+    def load_or_compute(cache_path, version, key, compute_fn):
+        cache_path = str(cache_path)
+
+        if IS_WASM:
+            # READ ONLY: fetch the committed JSON directly from GitHub Pages.
+            # Never create or read a local JSON cache in WASM mode.
+            url = _remote_asset_url(cache_path)
+            try:
+                cached = _read_remote_json(url)
+                if cached.get("version") == version and cached.get("key") == key:
+                    return cached["data"]
+            except Exception:
+                # If the cache is absent/stale, compute live in the browser.
+                # Nothing is written back to the repository.
+                pass
+            return compute_fn()
+
+        # Original local-cache behaviour for normal Marimo.
+        if os.path.exists(cache_path):
+            with open(cache_path) as f:
+                cached = json.load(f)
+            if cached.get("version") == version and cached.get("key") == key:
+                return cached["data"]
+
+        data = compute_fn()
+        _cache_dir = os.path.dirname(cache_path)
+        if _cache_dir:
+            os.makedirs(_cache_dir, exist_ok=True)
+        with open(cache_path, "w") as f:
+            json.dump({"version": version, "key": key, "data": data}, f)
+        return data
+
+    def load_json_asset(path):
+        """Read a repository JSON file directly by URL in WASM.
+
+        This is used for the saved Memo 03 response file. It never copies the
+        JSON into Pyodide in WASM mode.
+        """
+        if IS_WASM:
+            return _read_remote_json(_remote_asset_url(path))
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as _f:
+                return json.load(_f)
+        return []
 
     def plan_to_jsonable(plan):
         return [[list(u) for u in trip] for trip in plan]
@@ -1088,38 +1182,38 @@ def _(json, os):
     def plan_from_jsonable(data):
         return [[tuple(u) for u in trip] for trip in data]
 
-    return CACHE_VERSION, load_or_compute, plan_from_jsonable, plan_to_jsonable
+    return CACHE_VERSION, load_json_asset, load_or_compute, plan_from_jsonable, plan_to_jsonable
 
 
 @app.cell
-def _(json, os):
-    def load_or_render_gif(gif_path, version, key, render_fn=None):
-        """Read-only sibling of load_or_compute. Checks the small
-        `<gif_path>.json` sidecar (read via .read_text(), same
-        WASM/local-safe reasoning as load_or_compute above) matches the
-        expected version/key, then returns gif_path itself unchanged for
-        mo.image to render directly -- the GIF's own bytes are never read
-        into Python here, only its metadata sidecar is.
+def _(GITHUB_ASSET_BASE, IS_WASM, NB_DIR, json, os):
+    def _remote_asset_url(asset_path):
+        p = os.path.normpath(str(asset_path)).replace("\\", "/")
+        root = os.path.normpath(str(NB_DIR)).replace("\\", "/")
+        prefix = root.rstrip("/") + "/"
+        rel = p[len(prefix):] if p.startswith(prefix) else os.path.basename(p)
+        return GITHUB_ASSET_BASE + rel.lstrip("/")
 
-        render_fn is accepted only for call-site compatibility with the
-        original (torch-based, write-capable) notebook and is never
-        invoked. Generate every GIF locally and bundle
-        MEMO_3/extras_assets/ alongside this notebook, same as the JSON
-        caches above."""
-        meta_path = gif_path.with_name(gif_path.name + ".json")
-        try:
-            meta = json.loads(meta_path.read_text())
-        except (FileNotFoundError, OSError) as e:
-            raise FileNotFoundError(
-                f"Missing GIF or its sidecar: {gif_path}\n"
-                "Regenerate it by running the full notebook locally, then "
-                "re-bundle MEMO_3/extras_assets/ alongside this notebook."
-            ) from e
-        if meta.get("version") != version or meta.get("key") != key:
-            raise ValueError(
-                f"GIF is present but stale: {gif_path}\n"
-                "Regenerate it locally and re-bundle."
-            )
+    def load_or_render_gif(gif_path, version, key, render_fn):
+        """Use committed GIF by URL in WASM; render/cache locally otherwise."""
+        gif_path = str(gif_path)
+
+        if IS_WASM:
+            # Do not download the animation or its JSON sidecar. The browser
+            # loads the GIF directly from GitHub Pages through <img src=...>.
+            return _remote_asset_url(gif_path)
+
+        meta_path = gif_path + ".json"
+        if os.path.exists(gif_path) and os.path.exists(meta_path):
+            with open(meta_path) as f:
+                meta = json.load(f)
+            if meta.get("version") == version and meta.get("key") == key:
+                return gif_path
+
+        os.makedirs(os.path.dirname(gif_path) or ".", exist_ok=True)
+        render_fn(gif_path)
+        with open(meta_path, "w") as f:
+            json.dump({"version": version, "key": key}, f)
         return gif_path
 
     return (load_or_render_gif,)
@@ -1258,11 +1352,8 @@ def m31_student_algorithm(
     # Actor-Critic Policy Loader
     def load_policy_for_instance(inst, checkpoint_dir):
         n_wings = inst["n_wings"]
-        # .read_bytes() (not a bare path string) so this resolves correctly
-        # whether checkpoint_dir is a real local path or, under WASM, a URL
-        # that only Path's own read methods know how to fetch.
-        path = checkpoint_dir / f"policy_wings{n_wings}.npz"
-        actor, critic = trainmod.load_policy(path.read_bytes())
+        path = os.path.join(str(checkpoint_dir), f"policy_wings{n_wings}.npz")
+        actor, critic = trainmod.load_policy(path)
         return actor, critic, path
 
     # Validator
@@ -1640,7 +1731,7 @@ def m31_student_algorithm(
         return plan_to_jsonable(plan)
 
     _key = {"seed": aco_rng_seed, "budget": BUDGET}
-    my_plan = plan_from_jsonable(load_or_compute(CACHE_DIR / "cache_m31.json", CACHE_VERSION, _key, _compute_m31))
+    my_plan = plan_from_jsonable(load_or_compute(str(CACHE_DIR / "cache_m31.json"), CACHE_VERSION, _key, _compute_m31))
 
     _ok, _problems = validate_plan(my_plan, BUDGET)
 
@@ -1651,7 +1742,7 @@ def m31_student_algorithm(
             "**Plan is invalid:**\n\n" + "\n".join(f"- {p}" for p in _problems))
 
     mo.callout(mo.md(_msg), kind="success" if _ok else "danger")
-    return aco_rng_seed, my_algorithm, my_plan
+    return aco_rng_seed, my_algorithm, my_plan, trainmod
 
 
 @app.cell
@@ -1824,16 +1915,14 @@ def m32_comparison(
 
 
 @app.cell
-def m32_input(SAVE_FILE_M03, json, mo, os):
+def m32_input(SAVE_FILE_M03, load_json_asset, mo):
     _saved = ""
-    if os.path.exists(SAVE_FILE_M03):
-        try:
-            with open(SAVE_FILE_M03, "r") as _f:
-                _d = json.load(_f)
-            if _d:
-                _saved = _d[-1].get("M32_quality", "")
-        except Exception:
-            pass
+    try:
+        _d = load_json_asset(SAVE_FILE_M03)
+        if _d:
+            _saved = _d[-1].get("M32_quality", "")
+    except Exception:
+        pass
 
     resp_m32 = mo.ui.text_area(
         label="**[M3-2] Quality of your improved solution**",
@@ -1976,7 +2065,7 @@ def m33_benchmark(
         return {"ks": _ks, "times": _times, "vals": _vals}
 
     _key = {"seed": aco_rng_seed, "budget": BUDGET}
-    _result = load_or_compute(CACHE_DIR / "cache_m33.json", CACHE_VERSION, _key, _compute_m33)
+    _result = load_or_compute(str(CACHE_DIR / "cache_m33.json"), CACHE_VERSION, _key, _compute_m33)
     ks, times, vals = _result["ks"], _result["times"], _result["vals"]
 
     _fig, _axes = plt.subplots(1, 2, figsize=(11, 3.6))
@@ -2034,16 +2123,14 @@ def _(ks, plt, times):
 
 
 @app.cell
-def m33_input(SAVE_FILE_M03, json, mo, os):
+def m33_input(SAVE_FILE_M03, load_json_asset, mo):
     _saved = ""
-    if os.path.exists(SAVE_FILE_M03):
-        try:
-            with open(SAVE_FILE_M03, "r") as _f:
-                _d = json.load(_f)
-            if _d:
-                _saved = _d[-1].get("M33_complexity", "")
-        except Exception:
-            pass
+    try:
+        _d = load_json_asset(SAVE_FILE_M03)
+        if _d:
+            _saved = _d[-1].get("M33_complexity", "")
+    except Exception:
+        pass
 
     resp_m33 = mo.ui.text_area(
         label="**[M3-3] Time complexity of your improved solution (150-250 words)**",
@@ -2216,7 +2303,7 @@ def m34_calibration(
 
 
     _key = {"seed": aco_rng_seed, "k_range": [5, 15], "budget_props": [0.60, 0.35]}
-    _calib = load_or_compute(CACHE_DIR / "cache_m34_calibration.json", CACHE_VERSION, _key,
+    _calib = load_or_compute(str(CACHE_DIR / "cache_m34_calibration.json"), CACHE_VERSION, _key,
                               _compute_m34_calibration)
 
     def _split_rows(rows, label, budget_name):
@@ -2334,7 +2421,7 @@ def m34_wall_run(
     # Cached per slider value -- moving the slider back to a value you've
     # already run loads instantly instead of recomputing.
     _key = {"seed": aco_rng_seed, "wall_k": wall_k.value}
-    _wall = load_or_compute(CACHE_DIR / f"cache_m34_wall_{wall_k.value}.json", CACHE_VERSION,
+    _wall = load_or_compute(str(CACHE_DIR / f"cache_m34_wall_{wall_k.value}.json"), CACHE_VERSION,
                              _key, lambda: _compute_m34_wall(wall_k.value))
     _ks, _secs = _wall["ks"], _wall["secs"]
 
@@ -2388,16 +2475,14 @@ def m34_wall_run(
 
 
 @app.cell
-def m34_input(SAVE_FILE_M03, json, mo, os):
+def m34_input(SAVE_FILE_M03, load_json_asset, mo):
     _saved = ""
-    if os.path.exists(SAVE_FILE_M03):
-        try:
-            with open(SAVE_FILE_M03, "r") as _f:
-                _d = json.load(_f)
-            if _d:
-                _saved = _d[-1].get("M34_intractability", "")
-        except Exception:
-            pass
+    try:
+        _d = load_json_asset(SAVE_FILE_M03)
+        if _d:
+            _saved = _d[-1].get("M34_intractability", "")
+    except Exception:
+        pass
 
     resp_m34 = mo.ui.text_area(
         label="**[M3-4] Intractability and the case for a heuristic (200-300 words)**",
@@ -2472,7 +2557,7 @@ def m35_side_by_side(
         return {"rows": _rows}
 
     _key = {"seed": aco_rng_seed, "budget": BUDGET}
-    _m35 = load_or_compute(CACHE_DIR / "cache_m35.json", CACHE_VERSION, _key, _compute_m35)
+    _m35 = load_or_compute(str(CACHE_DIR / "cache_m35.json"), CACHE_VERSION, _key, _compute_m35)
 
     _table_rows = "\n".join(
         f"| {r['name']} | {r['value']} of {sum(VALUE.values())} | "
@@ -2494,16 +2579,14 @@ def m35_side_by_side(
 
 
 @app.cell
-def m35_input(SAVE_FILE_M03, json, mo, os):
+def m35_input(SAVE_FILE_M03, load_json_asset, mo):
     _saved = ""
-    if os.path.exists(SAVE_FILE_M03):
-        try:
-            with open(SAVE_FILE_M03, "r") as _f:
-                _d = json.load(_f)
-            if _d:
-                _saved = _d[-1].get("M35_comparison", "")
-        except Exception:
-            pass
+    try:
+        _d = load_json_asset(SAVE_FILE_M03)
+        if _d:
+            _saved = _d[-1].get("M35_comparison", "")
+    except Exception:
+        pass
 
     resp_m35 = mo.ui.text_area(
         label="**[M3-5] Comparing time complexities (400-600 words)**",
@@ -2593,16 +2676,14 @@ def m36_final_viz(
 
 
 @app.cell
-def m36_input(SAVE_FILE_M03, json, mo, os):
+def m36_input(SAVE_FILE_M03, load_json_asset, mo):
     _saved = ""
-    if os.path.exists(SAVE_FILE_M03):
-        try:
-            with open(SAVE_FILE_M03, "r") as _f:
-                _d = json.load(_f)
-            if _d:
-                _saved = _d[-1].get("M36_coherence", "")
-        except Exception:
-            pass
+    try:
+        _d = load_json_asset(SAVE_FILE_M03)
+        if _d:
+            _saved = _d[-1].get("M36_coherence", "")
+    except Exception:
+        pass
 
     resp_m36 = mo.ui.text_area(
         label="**[M3-6] Comparing coherence and fitness for purpose (300-400 words)**",
@@ -2662,6 +2743,7 @@ def ext_pipeline_helpers(
     plan_value,
     random,
     time,
+    trainmod,
     trip_cost,
 ):
     """
@@ -2673,7 +2755,7 @@ def ext_pipeline_helpers(
     cap (Extension A), and `ext_hybrid_solve` accepts a `stages` tuple so
     pipeline stages can be selectively disabled (Extension C).
     """
-    import numpy_policy as trainmod
+    #import numpy_policy as trainmod
 
     def ext_aco_plan_value(plan, inst):
         return inst["plan_value"](plan)
@@ -2732,10 +2814,8 @@ def ext_pipeline_helpers(
 
     def ext_load_policy(inst, checkpoint_dir):
         n_wings = inst["n_wings"]
-        # .read_bytes() (not a bare path string) -- same WASM-safety
-        # reasoning as m31_student_algorithm's load_policy_for_instance.
-        path = checkpoint_dir / f"policy_wings{n_wings}.npz"
-        actor, critic = trainmod.load_policy(path.read_bytes())
+        path = os.path.join(str(checkpoint_dir), f"policy_wings{n_wings}.npz")
+        actor, critic = trainmod.load_policy(path)
         return actor, critic
 
     def ext_inst_validate(inst, plan):
@@ -3097,7 +3177,7 @@ def ext_a_experiment(
         return {"rows": _rows}
 
     _key = {"seed": aco_rng_seed, "ks": [6, 8, 10, 12, 14]}
-    ext_a_result = load_or_compute(CACHE_DIR / "cache_ext_a.json", EXT_CACHE_VERSION, _key, _compute_ext_a)
+    ext_a_result = load_or_compute(str(CACHE_DIR / "cache_ext_a.json"), EXT_CACHE_VERSION, _key, _compute_ext_a)
     return (ext_a_result,)
 
 
@@ -3223,7 +3303,7 @@ def ext_b_experiment(
         return {"rows": _rows}
 
     _key = {"seed": aco_rng_seed, "budgets": [BUDGET, BUDGET_RESERVE]}
-    ext_b_result = load_or_compute(CACHE_DIR / "cache_ext_b.json", CACHE_VERSION, _key, _compute_ext_b)
+    ext_b_result = load_or_compute(str(CACHE_DIR / "cache_ext_b.json"), CACHE_VERSION, _key, _compute_ext_b)
     return (ext_b_result,)
 
 
@@ -3336,7 +3416,7 @@ def ext_c_experiment(
         return {"rows": _rows, "stage_names": [n for n, _ in _stage_configs]}
 
     _key = {"seed": aco_rng_seed, "budgets": [BUDGET, BUDGET_RESERVE]}
-    ext_c_result = load_or_compute(CACHE_DIR / "cache_ext_c.json", EXT_CACHE_VERSION, _key, _compute_ext_c)
+    ext_c_result = load_or_compute(str(CACHE_DIR / "cache_ext_c.json"), EXT_CACHE_VERSION, _key, _compute_ext_c)
     return (ext_c_result,)
 
 
@@ -3529,7 +3609,7 @@ def ext_e_experiment(
         return {"rows": _rows}
 
     _key = {"seed": aco_rng_seed, "ants_values": [8, 16, 32, 48, 64]}
-    ext_e_result = load_or_compute(CACHE_DIR / "cache_ext_e.json", EXT_CACHE_VERSION, _key, _compute_ext_e)
+    ext_e_result = load_or_compute(str(CACHE_DIR / "cache_ext_e.json"), EXT_CACHE_VERSION, _key, _compute_ext_e)
     return (ext_e_result,)
 
 
@@ -3659,7 +3739,7 @@ def viz_instrumented_run(
         }
 
     _key = {"seed": aco_rng_seed, "budget": BUDGET, "kind": "viz_instrumented_v1"}
-    viz_run = load_or_compute(CACHE_DIR / "cache_viz_instrumented.json", EXT_CACHE_VERSION,
+    viz_run = load_or_compute(str(CACHE_DIR / "cache_viz_instrumented.json"), EXT_CACHE_VERSION,
                                _key, _compute_viz_run)
     return (viz_run,)
 
@@ -3739,7 +3819,7 @@ def ext_f_generate(
         plt.close(_fig)
 
     ext_f_gif_path = load_or_render_gif(
-        ASSETS_DIR / "pheromone_evolution.gif",
+        str(ASSETS_DIR / "pheromone_evolution.gif"),
         EXT_CACHE_VERSION,
         {"kind": "ext_f_pheromone_evolution", "n_iters": len(_snaps), "hold_frames": 20},
         _render_ext_f_gif,
@@ -4318,7 +4398,7 @@ def ext_l_generate(
         plt.close(_fig)
 
     ext_l_gif_path = load_or_render_gif(
-        ASSETS_DIR / "route_replay.gif",
+        str(ASSETS_DIR / "route_replay.gif"),
         EXT_CACHE_VERSION,
         {"kind": "ext_l_route_replay", "plan": plan_to_jsonable(my_plan), "hold_frames": 20},
         _render_ext_l_gif,
@@ -4500,7 +4580,7 @@ def ext_n_experiment(
 
     _key = {"seed": aco_rng_seed, "ks": [6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30],
             "kind": "ext_n_fragmented_v2_interleaved"}
-    ext_n_result = load_or_compute(CACHE_DIR / "cache_ext_n.json", EXT_CACHE_VERSION, _key, _compute_ext_n)
+    ext_n_result = load_or_compute(str(CACHE_DIR / "cache_ext_n.json"), EXT_CACHE_VERSION, _key, _compute_ext_n)
     return (ext_n_result,)
 
 
@@ -4691,7 +4771,7 @@ def ext_o_experiment(
     _key = {"seed": aco_rng_seed,
             "ks": [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200],
             "kind": "ext_o_synthetic_v1"}
-    ext_o_result = load_or_compute(CACHE_DIR / "cache_ext_o.json", EXT_CACHE_VERSION, _key, _compute_ext_o)
+    ext_o_result = load_or_compute(str(CACHE_DIR / "cache_ext_o.json"), EXT_CACHE_VERSION, _key, _compute_ext_o)
     return (ext_o_result,)
 
 
@@ -4784,6 +4864,7 @@ def save_controls(mo):
 @app.cell
 def save_responses(
     SAVE_FILE_M03,
+    IS_WASM,
     datetime,
     json,
     mo,
@@ -4799,6 +4880,14 @@ def save_responses(
     save_btn,
 ):
     if save_btn.value > 0:
+        if IS_WASM:
+            _result = mo.callout(
+                mo.md("**Read-only GitHub Pages mode:** responses are not written to the repository. Copy/export your answers manually if you need to save them."),
+                kind="warn",
+            )
+            _result
+            return
+
         if os.path.exists(SAVE_FILE_M03):
             try:
                 with open(SAVE_FILE_M03, "r") as _f:
