@@ -1,3 +1,14 @@
+# /// script
+# [tool.marimo.display]
+# theme = "dark"
+# requires-python = ">=3.11"
+# dependencies = [
+#     "marimo",
+#     "networkx",
+#     "matplotlib",
+#     "numpy",
+# ]
+
 import marimo
 
 __generated_with = "0.23.4"
