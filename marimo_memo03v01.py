@@ -1,4 +1,9 @@
 # /// script
+# [tool.marimo.display]
+# theme = "dark"
+# ///
+
+# /// script
 # requires-python = ">=3.11"
 # dependencies = [
 #     "marimo",
