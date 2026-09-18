@@ -1,4 +1,6 @@
 # /// script
+# [tool.marimo.display]
+# theme = "dark"
 # requires-python = ">=3.11"
 # dependencies = [
 #     "marimo",
@@ -6,8 +8,6 @@
 #     "matplotlib",
 #     "numpy",
 # ]
-# [tool.marimo.display]
-# theme = "dark"
 # ///
 #
 # Note: torch has been removed on purpose. It has no WASM/Pyodide build,
